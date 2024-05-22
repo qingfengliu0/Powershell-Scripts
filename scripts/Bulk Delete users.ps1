@@ -1,6 +1,8 @@
-# Function to delete a profile folder or file using Robocopy
+# Function to delete a profile folder or file using Robocopy 
 $UserCredential = Get-Credential
-
+$UserListPath = "Users to Be Deleted.txt"
+$Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri http://POWDERKING.lcs.local/PowerShell/ -Authentication Kerberos -Credential $UserCredential
+Import-PSSession $Session -DisableNameChecking
 function Remove-ProfileItem {
     param (
         [string]$path
@@ -9,14 +11,14 @@ function Remove-ProfileItem {
     if (Test-Path $path) {
         try {
             # Use Robocopy to delete the directory or file
-            Robocopy Emptyfolder $path  /purge /e
+            Robocopy Emptyfolder $path  /purge /e /ndl /njh
             Remove-Item -path $path
-            Write-Host "Deleted item at path: $path" |Out-File -FilePath UsersDeleteResult.txt -Append
+            Write-Output "Deleted item at path: $path" |Out-File -FilePath UsersDeleteResult.txt -Append
         } catch {
-            Write-Host "Error deleting item at path: $path - $_" |Out-File -FilePath UsersDeleteResult.txt -Append
+            Write-Output "Error deleting item at path: $path - $_" |Out-File -FilePath UsersDeleteResult.txt -Append
         }
     } else {
-        Write-Host "Item not found at path: $path" |Out-File -FilePath UsersDeleteResult.txt -Append
+        Write-Output "Item not found at path: $path" |Out-File -FilePath UsersDeleteResult.txt -Append
     }
 }
 #get the username based on the firstname and lastname
@@ -26,25 +28,33 @@ function fetchUser{
         [string]$userfullname
     )
     # Split each entry into name and username
-    $FirstName, $LastName = $Entry -split " "
-    $user = Get-ADUser -Filter "GivenName -eq '$FirstName' -and Surname -eq '$LastName'"
+    $FirstName, $LastName = $userfullname -split " "
+    
+    $user = Get-ADUser -Filter "GivenName -eq '$($FirstName)' -and Surname -eq '$($LastName)'" -Properties *
+    return $user
 }
 
 function DeleteMailbox{
     param(
         [string]$userfullname
     )
-    $Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri http://POWDERKING.lcs.local/PowerShell/ -Authentication Kerberos -Credential $UserCredential
-    Import-PSSession $Session -DisableNameChecking
-    if (Remove-Mailbox -Identity $userfullname -Permanent $true){
-        Write-Output "$userfullname mailbox has been removed" |Out-File -FilePath UsersDeleteResult.txt -Append
-    }
-   else{
-        Write-Output "$userfullname mailbox not removed" |Out-File -FilePath UsersDeleteResult.txt -Append
-   }
+        Enter-PSSession -Session $Session
+        try {
+        # Attempt to remove the mailbox
+        Remove-Mailbox -Identity $userfullname -Permanent $true -ErrorAction Stop
 
+        # If removal is successful, write a success message to the log file
+        Write-Output "$userfullname mailbox has been removed" | Out-File -FilePath UsersDeleteResult.txt -Append
+    }
+    catch {
+        # If an exception occurs during removal, write an error message to the log file
+        Write-Output "Error removing $userfullname mailbox: $_" | Out-File -FilePath UsersDeleteResult.txt -Append
+    }
+    Exit-PSSession
 }
 #If the user is disabled then deleted the folders else say the user is still active !
+
+
 
 if (Test-Path $UserListPath) {
     # Read the list of names and usernames from the file
@@ -52,12 +62,14 @@ if (Test-Path $UserListPath) {
 
     # Loop through each entry and disable the corresponding user account
     foreach ($user in $UserList) {
+        write-host "the user is $user"
         $userObject = fetchUser -userfullname $user
         # get the paths
         $personalDrivePath = $userObject.HomeDirectory
+        $romaingProfile = $userObject.ProfilePath
         $roamingProfilePathV2 = "$($userObject.ProfilePath).V2"
         $roamingProfilePathV6 = "$($userObject.ProfilePath).V6"
-        $lldpuser = [adsi]"LDAP://$user"
+        $lldpuser = [adsi]"LDAP://$userObject"
         $lldpusertspath = $lldpuser.psbase.InvokeGet(“terminalservicesprofilepath”)
         $tsProfilePathV2 = "$($lldpusertspath).V2"
         $tsProfilePathV6 = "$($lldpusertspath).V6"
@@ -86,10 +98,14 @@ if (Test-Path $UserListPath) {
             #Remove email account
             DeleteMailbox -userfullname $user
 
-        } else if ($userObject.Enabled -eq $true) {
-            Write-Host "user not found" |Out-File -FilePath UsersDeleteResult.txt -Append
-        }else if 
+            #Remove Profile on Terminal Server
+	        Start-Process -FilePath 'delprof2.exe' -ArgumentList "/c:Phoenix /p /id:$($userObject.samAccountName)"
+
+        } elseif ($userObject.Enabled -eq $true) {
+            Write-Host "user stil enabled" |Out-File -FilePath UsersDeleteResult.txt -Append
+        }else{
+		Write-Host "user not found" |Out-File -FilePath UsersDeleteResult.txt -Append
+		}
     }
 }
-
 
