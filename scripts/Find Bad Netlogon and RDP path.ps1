@@ -10,7 +10,6 @@ $result = @()
 foreach ($user in $users) {
     $username = $user.SamAccountName
     $scriptPath = $user.ScriptPath
-    $lldpuser = [adsi]"LDAP://$user"
     # Fetch TerminalServicesProfilePath using ADSI with error handling
     $tsProfilePath = $null
     try {
