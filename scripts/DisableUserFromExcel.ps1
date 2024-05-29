@@ -113,6 +113,37 @@ function setOOOMessage{
 
 }
 
+function Remove-UserFromDistributionLists {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$UserIdentity
+    )
+
+    try {
+        # Iterate over each group and check if it is a distribution list (DL)
+        foreach ($groupDN in $groups) {
+            $group = Get-ADGroup -Identity $groupDN -Properties GroupCategory
+
+            # Check if the group is a distribution list
+            if ($group.GroupCategory -eq "Distribution") {
+                try {
+                    # Remove the user from the distribution list
+                    Remove-ADGroupMember -Identity $group -Members $user -Confirm:$false
+                    Log-Action "Removed user $UserIdentity from distribution list $($group.Name)."
+                } catch {
+                    Log-Action "Failed to remove user $UserIdentity from distribution list $($group.Name): $_"
+                }
+            }
+        }
+    } catch {
+        # Handle any errors
+        Log-Action "An error occurred: $_"
+    }
+}
+
+
+
+
 #function to provide modify access
 function provideFolderAccess{
     param(
@@ -201,7 +232,9 @@ foreach ($user in $users) {
 
     # Provide folder access to disable user's personal drive path
     provideFolderAccess -folderPermissionUser $folderPermissionUser -PersonalDrivePath $personalDrivePath
-   
+    
+    #Remove from DLs
+    Remove-UserFromDistributionLists -UserIdentity $userObject
     # Disable the user and hide from address list
     try {
         Disable-ADAccount -Identity $userObject
