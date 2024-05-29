@@ -40,14 +40,14 @@ function fetchUser{
         if ($user -eq $null) {
             Write-Warning "No user found with the given name(s)."
             Disconnect-ExchangeOnline -Session $Session
-            throw "disconnected"
+            throw "user cannot be found"
         } else {
             return $user
         }
     } catch {
         Write-Error "An error occurred while trying to retrieve the user: $_"
         Disconnect-ExchangeOnline -Session $Session
-        throw "disconnected"
+        throw "user cannot be found"
     }
 }
 
@@ -130,6 +130,8 @@ foreach ($user in $users) {
     $userfullname = $user.Name
     $userObject = fetchUser -userfullname $user.Name
     $permissionUserObject = fetchUser -userfullname $user.EmailPermissionUser
+    $forwardinguserObject = fetchuser - userfullname $user.forwardingUserName
+
     $forwardingUserName = $user.forwardingUserName
     $EmailPermissionUser = $user.EmailPermissionUser
     $folderPermissionUser = $user.FolderPermissionUser
@@ -183,7 +185,7 @@ foreach ($user in $users) {
     # Disable the user
     try {
         Disable-ADAccount -Identity $userObject
-	Set-ADUser -identity $userObject -Replace @{msExchHideFromAddressLists=$true} -ErrorAction Stop
+	    Set-ADUser -identity $userObject -Replace @{msExchHideFromAddressLists=$true} -ErrorAction Stop
         Log-Action "Disabled user account for $userfullname"
     } catch {
         Log-Action "Failed to disable user account for $userfullname : $_"
