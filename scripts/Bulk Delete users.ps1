@@ -75,6 +75,7 @@ if (Test-Path $UserListPath) {
         $tsProfilePathV6 = "$($lldpusertspath).V6"
         #the logon script could be pointed to the wrong name but still working, so pointing to the correct one. 
         $netlogonScriptPath = "$($userObject.samAccountName).bat"
+        $netlogonScriptPath = "\\red\NETLOGON\$netlogonScriptPath"
         if ($userObject.Enabled -eq $false) {
             Write-Host "$username is disabled."|Out-File -FilePath UsersDeleteResult.txt -Append
             # Delete the user's personal drive
