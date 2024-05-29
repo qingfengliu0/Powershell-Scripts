@@ -209,30 +209,48 @@ try {
 foreach ($user in $users) {
     $userfullname = $user.Name
     $userObject = fetchUser -userfullname $user.Name
-    $permissionUserObject = fetchUser -userfullname $user.EmailPermissionUser
-    $forwardinguserObject = fetchuser -userfullname $user.forwardingUserName
-
-    $forwardingUserName = $user.forwardingUserName
-    $EmailPermissionUser = $user.EmailPermissionUser
-    $folderPermissionUser = $user.FolderPermissionUser
-    $oooMessage = $user.OOOMessage
     $personalDrivePath = $userObject.HomeDirectory
-    $permissionUserDrivePath = $permissionUserObject.HomeDirectory
+    
 
     #forward email
-    ForwardEmail -userfullname $userfullname -forwardingUserName $forwardingUserName
-    #grant full permission 
-    GrantFullPermission -userfullname $userfullname -EmailPermissionUser $EmailPermissionUser
+    if($user.forwardingUserName -eq $null){
+        Log-Action "Forwarding Not required for $userfullname"
+    }else{
+        $forwardingUserName = $user.forwardingUserName
+        fetchuser -userfullname $user.forwardingUserName
+        ForwardEmail -userfullname $userfullname -forwardingUserName $user.forwardingUserName
+    }
     
-    #setup ooomessage 
-    setOOOMessage -userfullname $userfullname -oooMessage $oooMessage
-    
-    #add the shorcut to permission user's desktop point to the disable user
-    AddShorcut -permissionUserDrivePath $permissionUserDrivePath -PersonalDrivePath $personalDrivePath
+    #grant full permission
+    if($EmailPermissionUser -eq $null){ 
+        Log-Action "Email Permission Not required for $userfullname"
+    }else{
+        $EmailPermissionUser = $user.EmailPermissionUser
+        fetchUser -userfullname $user.EmailPermissionUser
+        GrantFullPermission -userfullname $userfullname -EmailPermissionUser $EmailPermissionUser
+    }
 
-    # Provide folder access to disable user's personal drive path
-    provideFolderAccess -folderPermissionUser $folderPermissionUser -PersonalDrivePath $personalDrivePath
+    #setup ooomessage 
+    if($ooMessage -eq $Null){
+        Log-Action "ooo message not required for $userfullname"
+    }else{
+        $oooMessage = $user.OOOMessage
+        setOOOMessage -userfullname $userfullname -oooMessage $oooMessage
+    }
     
+    #setup homefolder access
+    if($folderPermissionUser -eq $null){
+        Log-Action "folder permission not required for $userfullname"
+    }else{
+        $folderPermissionUser = $user.FolderPermissionUser
+        $permissionUserObject = fetchUser -userfullname $folderPermissionUser
+        $permissionUserDrivePath = $permissionUserObject.HomeDirectory
+        # Provide folder access to disable user's personal drive path
+        provideFolderAccess -folderPermissionUser $folderPermissionUser -PersonalDrivePath $personalDrivePath
+        #add the shorcut to permission user's desktop point to the disable user
+        AddShorcut -permissionUserDrivePath $permissionUserDrivePath -PersonalDrivePath $personalDrivePath
+    }
+
     #Remove from DLs
     Remove-UserFromDistributionLists -UserIdentity $userObject
     # Disable the user and hide from address list
