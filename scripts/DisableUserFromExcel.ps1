@@ -40,14 +40,14 @@ function fetchUser{
         if ($user -eq $null) {
             Write-Warning "No user found with the given name(s)."
             Disconnect-ExchangeOnline -Session $Session
-            throw "user cannot be found"
+            throw "$user cannot be found, check the source"
         } else {
             return $user
         }
     } catch {
         Write-Error "An error occurred while trying to retrieve the user: $_"
         Disconnect-ExchangeOnline -Session $Session
-        throw "user cannot be found"
+        throw "$user cannot be found, check the source"
     }
 }
 
@@ -113,42 +113,13 @@ function setOOOMessage{
 
 }
 
-# Read the Excel file
-$users = Import-Excel -Path $excelFilePath
-# Connect to Exchange Online
-$UserCredential = Get-Credential
-try {
-    $Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri http://cecelia.devonprop.local/PowerShell/ -Authentication Kerberos -Credential $UserCredential
-    Import-PSSession $Session -DisableNameChecking
-    Log-Action "Connected to Exchange Online"
-} catch {
-    Log-Action "Failed to connect to Exchange Online: $_"
-    exit
-}
+#function to provide modify access
+function provideFolderAccess{
+    param(
+    [String] $FolderPermissionUser, 
+    [String] $personalDrivePath
+    )
 
-foreach ($user in $users) {
-    $userfullname = $user.Name
-    $userObject = fetchUser -userfullname $user.Name
-    $permissionUserObject = fetchUser -userfullname $user.EmailPermissionUser
-    $forwardinguserObject = fetchuser - userfullname $user.forwardingUserName
-
-    $forwardingUserName = $user.forwardingUserName
-    $EmailPermissionUser = $user.EmailPermissionUser
-    $folderPermissionUser = $user.FolderPermissionUser
-    $oooMessage = $user.OOOMessage
-    $personalDrivePath = $userObject.HomeDirectory
-    $permissionUserDrivePath = $permissionUserObject.HomeDirectory
-
-    #forward email
-    ForwardEmail -userfullname $userfullname -forwardingUserName $forwardingUserName
-    #grant full permission 
-    GrantFullPermission -userfullname $userfullname -EmailPermissionUser $EmailPermissionUser
-    
-    #setup ooomessage 
-    setOOOMessage -userfullname $userfullname -oooMessage $oooMessage
-    
-
-    # Provide folder access
     try {
         # Define the user and the permissions
         $permissions = "Modify"
@@ -166,12 +137,20 @@ foreach ($user in $users) {
         Log-Action "Failed to grant folder access for $username : $_"
     }
     
+}
 
+function AddShorcut{
+
+    param(
+        [string]$permissionUserDrivePath,
+        [string]$personalDrivePath
+    )
     # Place a shortcut on the user's desktop
     try {
+        #create a shorcut on requester's desktop with name of the disableuser.ink
         $targetPath = "$permissionUserDrivePath\Desktop"
         $shortcutPath = Join-Path -Path $targetPath -ChildPath "$userfullname.lnk"
-        
+        #point the shorcut to disable user's home folder
         $wshShell = New-Object -ComObject WScript.Shell
         $shortcut = $wshShell.CreateShortcut($shortcutPath)
         $shortcut.TargetPath = $personalDrivePath  # The folder you want to link to
@@ -181,8 +160,49 @@ foreach ($user in $users) {
     } catch {
         Log-Action "Failed to create folder shortcut for $folderPermissionUser : $_"
     }
+}
 
-    # Disable the user
+# Read the Excel file
+$users = Import-Excel -Path $excelFilePath
+# Connect to Exchange Online
+$UserCredential = Get-Credential
+try {
+    $Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri http://cecelia.devonprop.local/PowerShell/ -Authentication Kerberos -Credential $UserCredential
+    Import-PSSession $Session -DisableNameChecking
+    Log-Action "Connected to Exchange Online"
+} catch {
+    Log-Action "Failed to connect to Exchange Online: $_"
+    exit
+}
+
+foreach ($user in $users) {
+    $userfullname = $user.Name
+    $userObject = fetchUser -userfullname $user.Name
+    $permissionUserObject = fetchUser -userfullname $user.EmailPermissionUser
+    $forwardinguserObject = fetchuser -userfullname $user.forwardingUserName
+
+    $forwardingUserName = $user.forwardingUserName
+    $EmailPermissionUser = $user.EmailPermissionUser
+    $folderPermissionUser = $user.FolderPermissionUser
+    $oooMessage = $user.OOOMessage
+    $personalDrivePath = $userObject.HomeDirectory
+    $permissionUserDrivePath = $permissionUserObject.HomeDirectory
+
+    #forward email
+    ForwardEmail -userfullname $userfullname -forwardingUserName $forwardingUserName
+    #grant full permission 
+    GrantFullPermission -userfullname $userfullname -EmailPermissionUser $EmailPermissionUser
+    
+    #setup ooomessage 
+    setOOOMessage -userfullname $userfullname -oooMessage $oooMessage
+    
+    #add the shorcut to permission user's desktop point to the disable user
+    AddShorcut -permissionUserDrivePath $permissionUserDrivePath -PersonalDrivePath $personalDrivePath
+
+    # Provide folder access to disable user's personal drive path
+    provideFolderAccess -folderPermissionUser $folderPermissionUser -PersonalDrivePath $personalDrivePath
+   
+    # Disable the user and hide from address list
     try {
         Disable-ADAccount -Identity $userObject
 	    Set-ADUser -identity $userObject -Replace @{msExchHideFromAddressLists=$true} -ErrorAction Stop
