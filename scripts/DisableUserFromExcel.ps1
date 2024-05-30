@@ -118,29 +118,35 @@ function Remove-UserFromDistributionLists {
         [string]$UserIdentity
     )
     $groups = Get-ADUser -Identity $UserIdentity -Properties MemberOf | Select-Object -ExpandProperty MemberOf
-    if ($groups -eq $null) {
-      Log-Action "$UserIdentity is not a member of any groups."
-          return
-        }
+    $DisplayName = Get-ADUser -Identity TestUser2 -Properties DisplayName | Select-Object -ExpandProperty DisplayName
+    # Check if $groups is null or an empty array
+    if (-not $groups) {
+        Log-Action "$UserIdentity is not a member of any groups."
+        return
+    }
 
     try {
         # Iterate over each group and check if it is a distribution list (DL)
         foreach ($groupDN in $groups) {
             $group = Get-ADGroup -Identity $groupDN -Properties GroupCategory
-            
+            # Initialize an array to hold distribution lists
+            $distributionLists = @()
             # Check if the group is a distribution list
             if ($group.GroupCategory -eq "Distribution") {
                 try {
                     # Remove the user from the distribution list
                     Remove-ADGroupMember -Identity $group -Members $userIdentity -Confirm:$false
-                    Log-Action "Removed user $userIdentity from distribution list $($group.Name)."
-                    
+                    Log-Action "Removed user $DisplayName from distribution list $($group.Name)."
+                    $distributionLists += $group.DistinguishedName
                 } catch {
-                    Log-Action "Failed to remove user $UserIdentity from distribution list $($group.Name): $_"
-                    
+                    Log-Action "Failed to remove user $DisplayName from distribution list $($group.Name): $_"
+                    $distributionLists += $group.DistinguishedName
                 }
             }
 
+        }
+       if ($distributionLists.Count -eq 0) {
+          Log-Action "$DisplayName is not a member of any distribution lists."
         }
         
     } catch {
@@ -240,7 +246,6 @@ foreach ($user in $users) {
             Log-Action "Failed to disable user account for $userfullname : $_"
         }
         try {
-            
 	        Set-ADUser -identity $userObject -Replace @{msExchHideFromAddressLists=$true} -ErrorAction Stop
             Log-Action "Hide $userfullname from address list"
         } catch {
@@ -268,7 +273,7 @@ foreach ($user in $users) {
     }
 
     #setup ooomessage 
-    if($user.ooMessage -eq ""){
+    if($user.ooMessage -eq $null){
         Log-Action "ooo message not required for $userfullname"
     }else{
         $oooMessage = $user.OOOMessage
