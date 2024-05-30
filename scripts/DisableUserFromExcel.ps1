@@ -1,11 +1,11 @@
 
 # Load required modules
-Import-Module ImportExcel
+#Import-Module ImportExcel
 Import-Module ActiveDirectory
 #Import-Module ExchangeOnlineManagement
 
 # Define the path to the Excel file and log file
-$excelFilePath = "userToBeDisabled.xlsx"
+$csvFilePath = "userToBeDisabled.csv"
 $logFilePath = "userdisable.log"
 
 #function to disconnect from exchange
@@ -23,31 +23,30 @@ function Disconnect-ExchangeOnline {
     }
 }
 
-function fetchUser{
+function fetchUser {
     param (
         [string]$userfullname
     )
     # Split each entry into name and username
     $FirstName, $LastName = $userfullname -split " "
-    #handle when lastname is empty like "testuser2"
+    # Handle when LastName is empty like "testuser2"
+    #Log-Action "the first name is $Firstname and last name is $lastname"
     try {
-        if ($LastName -eq $null) {
+        if ($LastName -eq $null -or $LastName -eq "") {
             $user = Get-ADUser -Filter "GivenName -eq '$($FirstName)'" -Properties *
         } else {
             $user = Get-ADUser -Filter "GivenName -eq '$($FirstName)' -and Surname -eq '$($LastName)'" -Properties *
         }
         
         if ($user -eq $null) {
-            Write-Warning "No user found with the given name(s)."
-            Disconnect-ExchangeOnline -Session $Session
-            throw "$user cannot be found, check the source"
+            Log-Action "No user found with the given name(s): $userfullname."
+            return $null
         } else {
             return $user
         }
     } catch {
-        Write-Error "An error occurred while trying to retrieve the user: $_"
-        Disconnect-ExchangeOnline -Session $Session
-        throw "$user cannot be found, check the source"
+        Log-Action "An error occurred while trying to retrieve the user: $_"
+        return $null
     }
 }
 
@@ -118,23 +117,32 @@ function Remove-UserFromDistributionLists {
         [Parameter(Mandatory = $true)]
         [string]$UserIdentity
     )
+    $groups = Get-ADUser -Identity $UserIdentity -Properties MemberOf | Select-Object -ExpandProperty MemberOf
+    if ($groups -eq $null) {
+      Log-Action "$UserIdentity is not a member of any groups."
+          return
+        }
 
     try {
         # Iterate over each group and check if it is a distribution list (DL)
         foreach ($groupDN in $groups) {
             $group = Get-ADGroup -Identity $groupDN -Properties GroupCategory
-
+            
             # Check if the group is a distribution list
             if ($group.GroupCategory -eq "Distribution") {
                 try {
                     # Remove the user from the distribution list
-                    Remove-ADGroupMember -Identity $group -Members $user -Confirm:$false
-                    Log-Action "Removed user $UserIdentity from distribution list $($group.Name)."
+                    Remove-ADGroupMember -Identity $group -Members $userIdentity -Confirm:$false
+                    Log-Action "Removed user $userIdentity from distribution list $($group.Name)."
+                    
                 } catch {
                     Log-Action "Failed to remove user $UserIdentity from distribution list $($group.Name): $_"
+                    
                 }
             }
+
         }
+        
     } catch {
         # Handle any errors
         Log-Action "An error occurred: $_"
@@ -194,7 +202,7 @@ function AddShorcut{
 }
 
 # Read the Excel file
-$users = Import-Excel -Path $excelFilePath
+$users = Import-CSV -Path $csvFilePath
 # Connect to Exchange Online
 $UserCredential = Get-Credential
 try {
@@ -207,22 +215,51 @@ try {
 }
 
 foreach ($user in $users) {
-    $userfullname = $user.Name
-    $userObject = fetchUser -userfullname $user.Name
-    $personalDrivePath = $userObject.HomeDirectory
     
+    $userfullname = $user.Name
+    $userObject = ""
+    $personalDrivePath = ""
+    if ($userfullname -eq $null){
+        Log-Action "user entry empty, continue to the next one"
+        continue
+    }
+    $userObject = fetchUser -userfullname $user.Name
+    if ($userObject -eq $null){
+        Log-Action "Can't find user in the active directory: $userfullname"
+        continue
+    }else{
+        $personalDrivePath = $userObject.HomeDirectory
+        #Remove from DLs
+        Remove-UserFromDistributionLists -UserIdentity $userObject
+        # Disable the user and hide from address list
+        try {
+            Disable-ADAccount -Identity $userObject
+	        Set-ADUser -identity $userObject -Replace @{msExchHideFromAddressLists=$true} -ErrorAction Stop
+            Log-Action "Disabled user account for $userfullname"
+        } catch {
+            Log-Action "Failed to disable user account for $userfullname : $_"
+        }
+        try {
+            
+	        Set-ADUser -identity $userObject -Replace @{msExchHideFromAddressLists=$true} -ErrorAction Stop
+            Log-Action "Hide $userfullname from address list"
+        } catch {
+            Log-Action "Failed to Hide $userfullname : $_"
+        }
+    }
 
     #forward email
-    if($user.forwardingUserName -eq $null){
+    if($user.forwardingUserName -eq ""){
         Log-Action "Forwarding Not required for $userfullname"
     }else{
         $forwardingUserName = $user.forwardingUserName
+        Log-Action "the forwarding username is $forwardingusername"
         fetchuser -userfullname $user.forwardingUserName
         ForwardEmail -userfullname $userfullname -forwardingUserName $user.forwardingUserName
     }
     
     #grant full permission
-    if($EmailPermissionUser -eq $null){ 
+    if($user.EmailPermissionUser -eq ""){ 
         Log-Action "Email Permission Not required for $userfullname"
     }else{
         $EmailPermissionUser = $user.EmailPermissionUser
@@ -231,7 +268,7 @@ foreach ($user in $users) {
     }
 
     #setup ooomessage 
-    if($ooMessage -eq $Null){
+    if($user.ooMessage -eq ""){
         Log-Action "ooo message not required for $userfullname"
     }else{
         $oooMessage = $user.OOOMessage
@@ -239,7 +276,7 @@ foreach ($user in $users) {
     }
     
     #setup homefolder access
-    if($folderPermissionUser -eq $null){
+    if($user.folderPermissionUser -eq ""){
         Log-Action "folder permission not required for $userfullname"
     }else{
         $folderPermissionUser = $user.FolderPermissionUser
@@ -251,16 +288,7 @@ foreach ($user in $users) {
         AddShorcut -permissionUserDrivePath $permissionUserDrivePath -PersonalDrivePath $personalDrivePath
     }
 
-    #Remove from DLs
-    Remove-UserFromDistributionLists -UserIdentity $userObject
-    # Disable the user and hide from address list
-    try {
-        Disable-ADAccount -Identity $userObject
-	    Set-ADUser -identity $userObject -Replace @{msExchHideFromAddressLists=$true} -ErrorAction Stop
-        Log-Action "Disabled user account for $userfullname"
-    } catch {
-        Log-Action "Failed to disable user account for $userfullname : $_"
-    }
+    
 }
 # Call the function to disconnect and log the action
 
