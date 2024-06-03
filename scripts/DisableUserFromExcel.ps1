@@ -27,28 +27,93 @@ function fetchUser {
     param (
         [string]$userfullname
     )
-    # Split each entry into name and username
+    # Split each entry into FirstName and LastName
     $FirstName, $LastName = $userfullname -split " "
-    # Handle when LastName is empty like "testuser2"
-    #Log-Action "the first name is $Firstname and last name is $lastname"
-    try {
-        if ($LastName -eq $null -or $LastName -eq "") {
-            $user = Get-ADUser -Filter "GivenName -eq '$($FirstName)'" -Properties *
-        } else {
-            $user = Get-ADUser -Filter "GivenName -eq '$($FirstName)' -and Surname -eq '$($LastName)'" -Properties *
-        }
+
+    # Function to handle duplicates and prompt user to choose
+    function HandleDuplicates {
+        param (
+            [array]$users
+        )
+        Write-Output "Multiple users found. Please choose the correct user by entering the corresponding number:"
+        $users | ForEach-Object { 
+            [PSCustomObject]@{
+                Index = $_.SamAccountName
+                SamAccountName = $_.SamAccountName
+                GivenName = $_.GivenName
+                Surname = $_.Surname
+            }
+        } | Format-Table -AutoSize
         
-        if ($user -eq $null) {
-            Log-Action "No user found with the given name(s): $userfullname."
-            return $null
+        $selectedIndex = Read-Host "Enter the SamAccountName of the user you want to select"
+        $selectedUser = $users | Where-Object { $_.SamAccountName -eq $selectedIndex }
+        
+        if ($selectedUser) {
+            return $selectedUser
         } else {
-            return $user
+            Write-Output "Invalid selection. No user found with SamAccountName '$selectedIndex'."
+            return $null
+        }
+    }
+    
+    try {
+        switch ($true) {
+            { $LastName -and $LastName -ne "" } {
+                $user = Get-ADUser -Filter "GivenName -eq '$($FirstName)' -and Surname -eq '$($LastName)'" -Properties *
+                if ($user.Count -eq 1) {
+                    return $user
+                } elseif ($user.Count -gt 1) {
+                    return HandleDuplicates -users $user
+                } else {
+                    # If no user found with FirstName and LastName, try FirstName only
+                    $user = Get-ADUser -Filter "GivenName -eq '$($FirstName)'" -Properties *
+                    if ($user.Count -eq 1) {
+                        return $user
+                    } elseif ($user.Count -gt 1) {
+                        return HandleDuplicates -users $user
+                    } else {
+                        # If no user found with FirstName only, try LastName only
+                        $user = Get-ADUser -Filter "Surname -eq '$($LastName)'" -Properties *
+                        if ($user.Count -eq 1) {
+                            return $user
+                        } elseif ($user.Count -gt 1) {
+                            return HandleDuplicates -users $user
+                        } else {
+                            Log-Action "No user found with the given name(s): $userfullname."
+                            return $null
+                        }
+                    }
+                }
+            }
+            { $FirstName -and $FirstName -ne "" } {
+                $user = Get-ADUser -Filter "GivenName -eq '$($FirstName)'" -Properties *
+                if ($user.Count -eq 1) {
+                    return $user
+                } elseif ($user.Count -gt 1) {
+                    return HandleDuplicates -users $user
+                } else {
+                    Log-Action "No user found with the given first name: $FirstName."
+                    return $null
+                }
+            }
+            { $LastName -and $LastName -ne "" } {
+                $user = Get-ADUser -Filter "Surname -eq '$($LastName)'" -Properties *
+                if ($user.Count -eq 1) {
+                    return $user
+                } elseif ($user.Count -gt 1) {
+                    return HandleDuplicates -users $user
+                } else {
+                    Log-Action "No user found with the given last name: $LastName."
+                    return $null
+                }
+            }
         }
     } catch {
         Log-Action "An error occurred while trying to retrieve the user: $_"
         return $null
     }
 }
+
 
 # Function to log actions
 function Log-Action {
