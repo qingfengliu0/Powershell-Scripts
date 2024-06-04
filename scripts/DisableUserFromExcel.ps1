@@ -22,99 +22,127 @@ function Disconnect-ExchangeOnline {
         Log-Action "Failed to disconnect from Exchange Online: $_"
     }
 }
+function Connect-ExchangeOnline{
+    param(
+        [String]$ExchangeURL
+        [String]$UserCredential
+    )
+    try {
+        $Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri  -Authentication Kerberos -Credential $UserCredential
+        Import-PSSession $Session -DisableNameChecking
+        Log-Action "Connected to Exchange Online"
+    } catch {
+        Log-Action "Failed to connect to Exchange Online: $_"
+        exit
+    }
+}
+function PresentUserList {
+    param (
+        [array]$users
+    )
 
+    if ($users.Count -eq 0) {
+        Write-Output "No users found."
+        return
+    }
+
+   
+    $formattedUsers = $users | ForEach-Object {
+        [PSCustomObject]@{
+            GivenName = $_.GivenName
+            Surname = $_.Surname
+            SamAccountName = $_.SamAccountName
+        }
+    } | Format-Table -AutoSize
+
+     Write-Host "List of users found: $formattedUsers"
+}
 function fetchUser {
     param (
-        [string]$userfullname
+        [string]$userfullname,
+        [String]$typeOfUser
     )
+    
     # Split each entry into FirstName and LastName
     $FirstName, $LastName = $userfullname -split " "
 
-    # Function to handle duplicates and prompt user to choose
-    function HandleDuplicates {
+        # Function to handle duplicates and prompt user to choose
+        function HandleDuplicates {
         param (
             [array]$users
         )
-        Write-Output "Multiple users found. Please choose the correct user by entering the corresponding number:"
-        $users | ForEach-Object { 
-            [PSCustomObject]@{
-                Index = $_.SamAccountName
-                SamAccountName = $_.SamAccountName
-                GivenName = $_.GivenName
-                Surname = $_.Surname
-            }
-        } | Format-Table -AutoSize
-        
-        $selectedIndex = Read-Host "Enter the SamAccountName of the user you want to select"
+
+        if ($users.Count -eq 0) {
+            Write-Output "No users found."
+            return $null
+        }
+
+        # Present the list of users
+        PresentUserList -users $users
+
+        Write-Host "Multiple users found. Please choose the correct $typeofUser by entering the corresponding SamAccountName:"
+    
+        $selectedIndex = Read-Host "Enter the SamAccountName of the $typeofUser you want to select"
         $selectedUser = $users | Where-Object { $_.SamAccountName -eq $selectedIndex }
         
         if ($selectedUser) {
-            return $selectedUser
+            $ADUser = Get-ADUser -Identity $selectedUser -Properties *
+            return $ADUser
         } else {
             Write-Output "Invalid selection. No user found with SamAccountName '$selectedIndex'."
             return $null
         }
     }
-    
+
     try {
-        switch ($true) {
-            { $LastName -and $LastName -ne "" } {
-                $user = Get-ADUser -Filter "GivenName -eq '$($FirstName)' -and Surname -eq '$($LastName)'" -Properties *
-                if ($user.Count -eq 1) {
-                    return $user
-                } elseif ($user.Count -gt 1) {
-                    return HandleDuplicates -users $user
-                } else {
-                    # If no user found with FirstName and LastName, try FirstName only
-                    $user = Get-ADUser -Filter "GivenName -eq '$($FirstName)'" -Properties *
-                    if ($user.Count -eq 1) {
-                        return $user
-                    } elseif ($user.Count -gt 1) {
-                        return HandleDuplicates -users $user
-                    } else {
-                        # If no user found with FirstName only, try LastName only
-                        $user = Get-ADUser -Filter "Surname -eq '$($LastName)'" -Properties *
-                        if ($user.Count -eq 1) {
-                            return $user
-                        } elseif ($user.Count -gt 1) {
-                            return HandleDuplicates -users $user
-                        } else {
-                            Log-Action "No user found with the given name(s): $userfullname."
-                            return $null
-                        }
-                    }
-                }
+        $user = $null
+
+        # Try finding by FirstName and LastName
+        if ($LastName) {
+            $user = @(Get-ADUser -Filter "GivenName -eq '$($FirstName)' -and Surname -eq '$($LastName)'" -Properties *)
+            $count = $user.Count
+            Log-Action "Found $count user(s) with the given name: $userfullname"
+            if ($count -eq 1) {
+                return $user
+            } elseif ($count -gt 1) {
+                return HandleDuplicates -users $user
             }
-            { $FirstName -and $FirstName -ne "" } {
-                $user = Get-ADUser -Filter "GivenName -eq '$($FirstName)'" -Properties *
-                if ($user.Count -eq 1) {
-                    return $user
-                } elseif ($user.Count -gt 1) {
-                    return HandleDuplicates -users $user
-                } else {
-                    Log-Action "No user found with the given first name: $FirstName."
-                    return $null
-                }
+        }
+
+        # If not found, try finding by FirstName only
+        if (-not $user) {
+            $user = @(Get-ADUser -Filter "GivenName -eq '$($FirstName)'" -Properties *)
+            $count = $user.Count
+            Log-Action "Found $count user(s) with the first name: $FirstName"
+            if ($count -eq 1) {
+                return $user
+            } elseif ($count -gt 1) {
+                return HandleDuplicates -users $user
             }
-            { $LastName -and $LastName -ne "" } {
-                $user = Get-ADUser -Filter "Surname -eq '$($LastName)'" -Properties *
-                if ($user.Count -eq 1) {
-                    return $user
-                } elseif ($user.Count -gt 1) {
-                    return HandleDuplicates -users $user
-                } else {
-                    Log-Action "No user found with the given last name: $LastName."
-                    return $null
-                }
+        }
+
+        # If still not found, try finding by LastName only
+        if (-not $user) {
+            $user = @(Get-ADUser -Filter "Surname -eq '$($LastName)'" -Properties *)
+            $count = $user.Count
+            Log-Action "Found $count user(s) with the last name: $LastName"
+            if ($count -eq 1) {
+                return $user
+            } elseif ($count -gt 1) {
+                return HandleDuplicates -users $user
             }
+        }
+
+        # If no user found at all
+        if (-not $user) {
+            Log-Action "No user found with the given name(s): $userfullname."
+            return $null
         }
     } catch {
         Log-Action "An error occurred while trying to retrieve the user: $_"
         return $null
     }
 }
-
-
 # Function to log actions
 function Log-Action {
     param (
@@ -123,7 +151,6 @@ function Log-Action {
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     Add-Content -Path $logFilePath -Value "$timestamp - $message"
 }
-
 #functiontoHandleForwarding email
 function ForwardEmail{
     param(
@@ -140,13 +167,12 @@ function ForwardEmail{
     # Forward emails
     try {
         Set-Mailbox -Identity $userfullname -ForwardingSMTPAddress $forwardingSmtpEmailAddress -DeliverToMailboxAndForward $true
-        Log-Action "Set email forwarding for $userfullname to $forwardingEmailAddress"
+        Log-Action "Set email forwarding for $userfullname to $forwardingSmtpEmailAddress"
     } catch {
         Log-Action "Failed to set email forwarding for $userfullname : $_"
     }
 
 }
-
 function GrantFullPermission{
     param(
         [string] $userfullname, 
@@ -160,7 +186,6 @@ function GrantFullPermission{
         Log-Action "Failed to grant mailbox permissions for $userfullname : $_"
     }
 }
-
 function setOOOMessage{
     param(
         [string] $userfullname, 
@@ -169,6 +194,7 @@ function setOOOMessage{
     )
     # Configure Out-of-Office message
     try {
+        $oomessage = $oooMessage.replace("\n","'`n")
         Set-MailboxAutoReplyConfiguration -Identity $userfullname -AutoReplyState Enabled -InternalMessage $oooMessage -ExternalMessage $oooMessage
         Log-Action "Set Out-of-Office message for $userfullname"
     } catch {
@@ -176,14 +202,13 @@ function setOOOMessage{
     }
 
 }
-
 function Remove-UserFromDistributionLists {
     param (
         [Parameter(Mandatory = $true)]
         [string]$UserIdentity
     )
     $groups = Get-ADUser -Identity $UserIdentity -Properties MemberOf | Select-Object -ExpandProperty MemberOf
-    $DisplayName = Get-ADUser -Identity TestUser2 -Properties DisplayName | Select-Object -ExpandProperty DisplayName
+    $DisplayName = Get-ADUser -Identity $UserIdentity -Properties DisplayName | Select-Object -ExpandProperty DisplayName
     # Check if $groups is null or an empty array
     if (-not $groups) {
         Log-Action "$UserIdentity is not a member of any groups."
@@ -219,10 +244,6 @@ function Remove-UserFromDistributionLists {
         Log-Action "An error occurred: $_"
     }
 }
-
-
-
-
 #function to provide modify access
 function provideFolderAccess{
     param(
@@ -248,7 +269,6 @@ function provideFolderAccess{
     }
     
 }
-
 function AddShorcut{
 
     param(
@@ -274,93 +294,102 @@ function AddShorcut{
 
 # Read the Excel file
 $users = Import-CSV -Path $csvFilePath
-# Connect to Exchange Online
+#get exchange admin credentials
 $UserCredential = Get-Credential
-try {
-    $Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri http://cecelia.devonprop.local/PowerShell/ -Authentication Kerberos -Credential $UserCredential
-    Import-PSSession $Session -DisableNameChecking
-    Log-Action "Connected to Exchange Online"
-} catch {
-    Log-Action "Failed to connect to Exchange Online: $_"
-    exit
-}
 
+# Connect to Exchange Online
+Connect-ExchangeOnline -ExchangeURL http://cecelia.devonprop.local/PowerShell/ -UserCredential $UserCredential
+
+#Check each users in the sheet
 foreach ($user in $users) {
-    
-    $userfullname = $user.Name
-    $userObject = ""
-    $personalDrivePath = ""
-    if ($userfullname -eq $null){
-        Log-Action "user entry empty, continue to the next one"
-        continue
-    }
-    $userObject = fetchUser -userfullname $user.Name
-    if ($userObject -eq $null){
-        Log-Action "Can't find user in the active directory: $userfullname"
-        continue
-    }else{
-        $personalDrivePath = $userObject.HomeDirectory
-        #Remove from DLs
-        Remove-UserFromDistributionLists -UserIdentity $userObject
-        # Disable the user and hide from address list
-        try {
-            Disable-ADAccount -Identity $userObject
-	        Set-ADUser -identity $userObject -Replace @{msExchHideFromAddressLists=$true} -ErrorAction Stop
-            Log-Action "Disabled user account for $userfullname"
-        } catch {
-            Log-Action "Failed to disable user account for $userfullname : $_"
+    #iff the user is not already disabled
+    if($user.Disabled -eq "No"){
+        $userfullname = $user.Name
+        $userObject = ""
+        $personalDrivePath = ""
+        
+        if ($userfullname -eq $null){
+            Log-Action "user entry empty, continue to the next one"
+            continue
         }
-        try {
-	        Set-ADUser -identity $userObject -Replace @{msExchHideFromAddressLists=$true} -ErrorAction Stop
-            Log-Action "Hide $userfullname from address list"
-        } catch {
-            Log-Action "Failed to Hide $userfullname : $_"
+        $userObject = fetchUser -userfullname $user.Name -typeOfUser "User to Be Disabled"
+        if ($userObject -eq $null){
+            Log-Action "Can't find user in the active directory: $userfullname"
+            continue
+        }else{
+            $userO
+            $personalDrivePath = $userObject.HomeDirectory
+            #Remove from DLs
+            Remove-UserFromDistributionLists -UserIdentity $userObject.SamAccountName
+            # Disable the user and hide from address list
+            
+            try {
+                Disable-ADAccount -Identity $userObject.SamAccountName
+                Set-ADUser -identity $userObject.SamAccountName -Replace @{msExchHideFromAddressLists=$true} -ErrorAction Stop
+                Log-Action "Disabled user account for $userfullname"
+            } catch {
+                Log-Action "Failed to disable user account for $userfullname : $_"
+            }
+            try {
+                Set-ADUser -identity $userObject.SamAccountName -Replace @{msExchHideFromAddressLists=$true} -ErrorAction Stop
+                Log-Action "Hide $userfullname from address list"
+            } catch {
+                Log-Action "Failed to Hide $userfullname : $_"
+            }
         }
-    }
 
-    #forward email
-    if($user.forwardingUserName -eq ""){
-        Log-Action "Forwarding Not required for $userfullname"
-    }else{
-        $forwardingUserName = $user.forwardingUserName
-        Log-Action "the forwarding username is $forwardingusername"
-        fetchuser -userfullname $user.forwardingUserName
-        ForwardEmail -userfullname $userfullname -forwardingUserName $user.forwardingUserName
-    }
-    
-    #grant full permission
-    if($user.EmailPermissionUser -eq ""){ 
-        Log-Action "Email Permission Not required for $userfullname"
-    }else{
-        $EmailPermissionUser = $user.EmailPermissionUser
-        fetchUser -userfullname $user.EmailPermissionUser
-        GrantFullPermission -userfullname $userfullname -EmailPermissionUser $EmailPermissionUser
-    }
+        #forward email
+        if($user.forwardingUserName -eq ""){
+            Log-Action "Forwarding Not required for $userfullname"
+        }else{
+            $forwardingUserName = $user.forwardingUserName
+            Log-Action "the forwarding username is $forwardingusername"
+            $fowarduserObject = fetchuser -userfullname $user.forwardingUserName -typeOfUser "user to forward email to"
+            ForwardEmail -userfullname $userObject.mail.toString() -forwardingUserName $fowarduserObject.mail.toString()
+        }
+        
+        #grant full permission
+        if($user.EmailPermissionUser -eq ""){ 
+            Log-Action "Email Permission Not required for $userfullname"
+        }else{
+            $EmailPermissionUser = $user.EmailPermissionUser
+            $EmailPermissionUserObject = fetchUser -userfullname $EmailPermissionUser -typeOfUser "user to have full email permission"
+        
+            GrantFullPermission -userfullname $userObject.mail.toString() -EmailPermissionUser $EmailPermissionUserObject.mail.toString()
 
-    #setup ooomessage 
-    if($user.ooMessage -eq $null){
-        Log-Action "ooo message not required for $userfullname"
-    }else{
-        $oooMessage = $user.OOOMessage
-        setOOOMessage -userfullname $userfullname -oooMessage $oooMessage
-    }
-    
-    #setup homefolder access
-    if($user.folderPermissionUser -eq ""){
-        Log-Action "folder permission not required for $userfullname"
-    }else{
-        $folderPermissionUser = $user.FolderPermissionUser
-        $permissionUserObject = fetchUser -userfullname $folderPermissionUser
-        $permissionUserDrivePath = $permissionUserObject.HomeDirectory
-        # Provide folder access to disable user's personal drive path
-        provideFolderAccess -folderPermissionUser $folderPermissionUser -PersonalDrivePath $personalDrivePath
-        #add the shorcut to permission user's desktop point to the disable user
-        AddShorcut -permissionUserDrivePath $permissionUserDrivePath -PersonalDrivePath $personalDrivePath
-    }
+        }
 
+        #setup ooomessage 
+        if($user.oooMessage -eq ""){
+            Log-Action "ooo message not required for $userfullname"
+        }else{
+            $oooMessage = $user.OOOMessage
+            setOOOMessage -userfullname $userObject.mail.ToString() -oooMessage $oooMessage
+        }
+        
+        #setup homefolder access
+        if($user.folderPermissionUser -eq ""){
+            Log-Action "folder permission not required for $userfullname"
+        }else{
+            if ($personalDrivePath -ne $null){
+                $folderPermissionUser = $user.FolderPermissionUser
+                $permissionUserObject = fetchUser -userfullname $folderPermissionUser -typeOfUser "user to have modify folder permission"
+                $permissionUserDrivePath = $permissionUserObject.HomeDirectory
+                # Provide folder access to disable user's personal drive path
+                provideFolderAccess -folderPermissionUser $folderPermissionUser -PersonalDrivePath $personalDrivePath
+                #add the shorcut to permission user's desktop point to the disable user
+                AddShorcut -permissionUserDrivePath $permissionUserDrivePath -PersonalDrivePath $personalDrivePath
+            }else{
+
+                Log-Action "$userfullname home directory is non exists"
+            }
+        }
+    }else{
+        Log-Action "The user '$($user.name)' was already disabled"
+        Continue
+    }
     
 }
 # Call the function to disconnect and log the action
-
 Disconnect-ExchangeOnline -Session $Session
 Write-Host "Processing completed. Log file created at $logFilePath"
