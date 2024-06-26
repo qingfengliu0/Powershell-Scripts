@@ -1,7 +1,4 @@
-# Function to delete a profile folder or file using Robocopy 
 $UserCredential = Get-Credential
-$fileServer = "Empress"
-$UserListPath = "Users to Be Deleted.csv"
 $Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri http://POWDERKING.lcs.local/PowerShell/ -Authentication Kerberos -Credential $UserCredential
 Import-PSSession $Session -DisableNameChecking
 
@@ -26,22 +23,18 @@ function PresentUserList {
     Write-Host "List of users found:"
     $formattedUsers | Format-Table -Property SamAccountName, GivenName, Surname -AutoSize | Out-String | Write-Host
 }
-#remove the shorcut if it still there
+
 function RemoveShortcut {
     param(
         [string]$permissionUserDrivePath,
         [string]$shortcutName
     )
     
-    # Attempt to remove the shortcut from the user's desktop
     try {
-        # Define the path to the shortcut on the user's desktop
         $targetPath = "$permissionUserDrivePath\Desktop"
         $shortcutPath = Join-Path -Path $targetPath -ChildPath "$shortcutName.lnk"
         
-        # Check if the shortcut exists
         if (Test-Path $shortcutPath) {
-            # Remove the shortcut
             Remove-Item -Path $shortcutPath -Force
             Log-Action "Removed shortcut $shortcutName from $permissionUserDrivePath's desktop"
         } else {
@@ -51,41 +44,41 @@ function RemoveShortcut {
         Log-Action "Failed to remove shortcut $shortcutName from $permissionUserDrivePath's desktop : $_"
     }
 }
-#find the user to be delted
+
 function fetchUser {
     param (
         [string]$userfullname,
-        [String]$typeOfUser
+        [string]$typeOfUser
     )
     
     # Split each entry into FirstName and LastName
     $FirstName, $LastName = $userfullname -split " "
-    
-    
-        # Function to handle duplicates and prompt user to choose
-        function HandleDuplicates {
+    $FirstName = $FirstName.trim()
+    $Lastname = $Lastname.trim()
+    # Function to handle duplicates and prompt user to choose
+    function HandleDuplicates {
         param (
             [array]$users
         )
 
         if ($users.Count -eq 0) {
-            Log-Action "No users found."
+            Write-Output "No users found."
             return $null
         }
 
         # Present the list of users
         PresentUserList -users $users
 
-        Write-Host "Multiple users found. Please choose the correct $typeofUser by entering the corresponding SamAccountName:"
+        Write-Host "Multiple users found. Please choose the correct $typeOfUser by entering the corresponding SamAccountName:"
     
-        $selectedIndex = Read-Host "Enter the SamAccountName of the $typeofUser you want to select"
+        $selectedIndex = Read-Host "Enter the SamAccountName of the $typeOfUser you want to select"
         $selectedUser = $users | Where-Object { $_.SamAccountName -eq $selectedIndex }
         
         if ($selectedUser) {
             $ADUser = Get-ADUser -Identity $selectedUser -Properties *
             return $ADUser
         } else {
-            Log-Action "Invalid selection. No user found with SamAccountName '$selectedIndex'."
+            Write-Output "Invalid selection. No user found with SamAccountName '$selectedIndex'."
             return $null
         }
     }
@@ -94,9 +87,9 @@ function fetchUser {
         $user = $null
 
         # Try finding by FirstName and LastName
-        if ($LastName -and $Fistname) {
-            $Firstname = $Firstname.trim()
-            $Lastname = $Lastname.trim()
+        if ($LastName -and $FirstName) {
+            $FirstName = $FirstName.trim()
+            $LastName = $LastName.trim()
             $user = @(Get-ADUser -Filter "GivenName -eq '$($FirstName)' -and Surname -eq '$($LastName)'" -Properties *)
             $count = $user.Count
             Log-Action "Found $count user(s) with the given name: $userfullname"
@@ -109,7 +102,7 @@ function fetchUser {
 
         # If not found, try finding by FirstName only
         if (-not $user) {
-            $Firstname = $Firstname.trim()
+            $FirstName = $FirstName.trim()
             $user = @(Get-ADUser -Filter "GivenName -eq '$($FirstName)'" -Properties *)
             $count = $user.Count
             Log-Action "Found $count user(s) with the first name: $FirstName"
@@ -149,8 +142,11 @@ function Log-Action {
         [string]$message
     )
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    Add-Content -Path $logFilePath -Value "$timestamp - $message"
+    $logMessage = "$timestamp - $message"
+    Add-Content -Path $logFilePath -Value $logMessage
+    Write-Host $logMessage
 }
+
 function Remove-ProfileItem {
     param (
         [string]$path
@@ -158,38 +154,31 @@ function Remove-ProfileItem {
 
     if (Test-Path $path) {
         try {
-            # Use Robocopy to delete the directory or file
-            Robocopy Emptyfolder $path  /purge /e /ndl /njh
-            Remove-Item -path $path
-            Log-Action "Deleted item at path: $path" |Out-File -FilePath UsersDeleteResult.txt -Append
+            Robocopy Emptyfolder $path /purge /e /ndl /njh
+            Remove-Item -Path $path
+            Log-Action "Deleted item at path: $path" | Out-File -FilePath UsersDeleteResult.txt -Append
         } catch {
-            Log-Action "Error deleting item at path: $path - $_" |Out-File -FilePath UsersDeleteResult.txt -Append
+            Log-Action "Error deleting item at path: $path - $_" | Out-File -FilePath UsersDeleteResult.txt -Append
         }
     } else {
-        Log-Action "Item not found at path: $path" |Out-File -FilePath UsersDeleteResult.txt -Append
+        Log-Action "Item not found at path: $path" | Out-File -FilePath UsersDeleteResult.txt -Append
     }
 }
 
-function DeleteMailbox{
+function DeleteMailbox {
     param(
         [string]$userfullname
     )
-        Enter-PSSession -Session $Session
-        try {
-        # Attempt to remove the mailbox
+    Enter-PSSession -Session $Session
+    try {
         Remove-Mailbox -Identity $userfullname -Permanent $true -ErrorAction Stop
-
-        # If removal is successful, write a success message to the log file
         Log-Action "$userfullname mailbox has been removed" | Out-File -FilePath UsersDeleteResult.txt -Append
-    }
-    catch {
-        # If an exception occurs during removal, write an error message to the log file
+    } catch {
         Log-Action "Error removing $userfullname mailbox: $_" | Out-File -FilePath UsersDeleteResult.txt -Append
     }
     Exit-PSSession
 }
 
-#disconnect the exchange session
 function Disconnect-ExchangeOnline {
     param (
         [Parameter(Mandatory = $true)]
@@ -204,71 +193,75 @@ function Disconnect-ExchangeOnline {
     }
 }
 
-function DeleteProfile{
-    param
-    Start-Process -FilePath 'delprof2.exe' -ArgumentList "/c:Phoenix /p /id:$($userObject.samAccountName)"
+function DeleteProfile {
+    param (
+        [string]$samAccountName,
+        [array]$computers
+    )
+
+    foreach ($computer in $computers) {
+        try {
+            Start-Process -FilePath 'delprof2.exe' -ArgumentList "/c:$computer /p /id:$samAccountName" -Wait
+            Log-Action "Deleted profile for $samAccountName on $computer"
+        } catch {
+            Log-Action "Failed to delete profile for $samAccountName on $computer: $_"
+        }
+    }
 }
 
-#main method
-if (Test-Path $UserListPath) {
-    # Read the list of names and usernames from the file
-    $UserList = Get-Content $UserListPath
-    # Loop through each entry and disable the corresponding user account
-    foreach ($user in $UserList) {
-        if ($user.DeletionApproval -eq "Yes"){
-        #if the Approval for Deletion is true
-        $userObject = fetchUser -userfullname $user
-        # get the paths
+do {
+    $userfullname = Read-Host "Enter the full name of the user to be deleted (Firstname Lastname) or type 'exit' to quit"
+    if ($userfullname -eq 'exit') { break }
+
+    do {
+        $userObject = fetchUser -userfullname $userfullname -typeOfUser "user to be deleted"
+        if ($userObject) {
+            Write-Host "You selected user: $($userObject.GivenName) $($userObject.Surname) (Account is $($userObject.Enabled ? 'enabled' : 'disabled'))"
+            $confirmation = Read-Host "Is this correct? (yes/no)"
+        } else {
+            Log-Action "Can't find user in the Active Directory: $userfullname"
+            $confirmation = "no"
+        }
+    } while ($confirmation -ne "yes")
+
+    if ($userObject -ne $null) {
         $personalDrivePath = $userObject.HomeDirectory
-        $romaingProfile = $userObject.ProfilePath
-        $roamingProfilePathV2 = "$($userObject.ProfilePath).V2"
-        $roamingProfilePathV6 = "$($userObject.ProfilePath).V6"
-        $lldpuser = [adsi]"LDAP://$userObject"
-        $lldpusertspath = $lldpuser.psbase.InvokeGet(“terminalservicesprofilepath”)
-        $tsProfilePathV2 = "$($lldpusertspath).V2"
-        $tsProfilePathV6 = "$($lldpusertspath).V6"
-        #the logon script could be pointed to the wrong name but still working, so pointing to the correct one. 
-        $netlogonScriptPath = "$($userObject.samAccountName).bat"
-        $netlogonScriptPath = "\\$fileServer\NETLOGON\$netlogonScriptPath"
-        #if the the users is currently disabled 
+        $roamingProfilePath = $userObject.ProfilePath
+        $roamingProfilePathV2 = "$roamingProfilePath.V2"
+        $roamingProfilePathV6 = "$roamingProfilePath.V6"
+        $lldpuser = [adsi]"LDAP://$($userObject.DistinguishedName)"
+        $lldpusertspath = $lldpuser.psbase.InvokeGet("terminalservicesprofilepath")
+        $tsProfilePathV2 = "$lldpusertspath.V2"
+        $tsProfilePathV6 = "$lldpusertspath.V6"
+        #$netlogonScriptPath = "\\$fileServer\NETLOGON\$($userObject.samAccountName).bat"
+
         if ($userObject.Enabled -eq $false) {
-            Log-Action "$username is disabled."|Out-File -FilePath UsersDeleteResult.txt -Append
-            # Delete the user's personal drive
-            if (user.Archive -eq "Yes"){
-                #Archive the mailbox
+            Log-Action "$($userObject.SamAccountName) is disabled." | Out-File -FilePath UsersDeleteResult.txt -Append
 
-                New-MailboxExportRequest -Mailbox $userObject.mail.toString() -FilePath "\\Cecelia\c$\temp\$($userobject.samAccountName).pst" -Name "$($userobject.samAccountName)"
-                #Remove email account
-                DeleteMailbox -userfullname $userObject.mail.toString()
-            else {
-                #Remove email account
-                #DeleteMailbox -userfullname $userObject.mail.toString()
-            }
             Remove-ProfileItem -path $personalDrivePath
-
-            # Delete the roaming profile folder for V2 format
             Remove-ProfileItem -path $roamingProfilePathV2
-
-            # Delete the roaming profile folder for V6 format
             Remove-ProfileItem -path $roamingProfilePathV6
-
-            # Delete the terminal server profile folder for V2 format
             Remove-ProfileItem -path $tsProfilePathV2
-
-            # Delete the terminal server profile folder for V6 format
             Remove-ProfileItem -path $tsProfilePathV6
-
-            # Check if the user's logon script exists and delete it
-            Remove-ProfileItem -path $netlogonScriptPath	        
-
+            #Remove-ProfileItem -path $netlogonScriptPath  
+            $computers = @()
+        do {
+            $computer = Read-Host "Enter the name of a computer the user has access to (type 'done' when finished)"
+            if ($computer -ne 'done') {
+                $computers += $computer
+            }
+        } while ($computer -ne 'done')
+        
+            DeleteProfile -samAccountName $userObject.samAccountName -computers $computers
+            Log-Action "Completed deletion tasks for user $($userObject.GivenName) $($userObject.Surname)."
         } elseif ($userObject.Enabled -eq $true) {
-            Log-Action "user stil enabled" |Out-File -FilePath UsersDeleteResult.txt -Append
-        }else{
-		Log-Action "user not found" |Out-File -FilePath UsersDeleteResult.txt -Append
-		}
-    }
-    }else{
-        Log-Action ("the user $user did not get a approval for deletion yet, move to the next one")
-    }
-}
-
+            Log-Action "User $($userObject.GivenName) $($userObject.Surname) is still enabled, skipping deletion."
+        } else {
+            Log-Action "User $($userObject.GivenName) $($userObject.Surname) not found."
+            }
+        }
+    } while ($true)
+    
+    # Disconnect from Exchange Online
+    Disconnect-ExchangeOnline -Session $Session
+    Write-Host "Processing completed. Log file created at $logFilePath"

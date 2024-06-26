@@ -67,7 +67,7 @@ function fetchUser {
         # Present the list of users
         PresentUserList -users $users
 
-        Write-Host "Multiple users found. Please choose the correct $typeOfUser by entering the corresponding SamAccountName:"
+        Write-Host "users found. Please choose the correct $typeOfUser by entering the corresponding SamAccountName:"
     
         $selectedIndex = Read-Host "Enter the SamAccountName of the $typeOfUser you want to select"
         $selectedUser = $users | Where-Object { $_.SamAccountName -eq $selectedIndex }
@@ -81,47 +81,56 @@ function fetchUser {
         }
     }
 
+    function FindUser {
+        param (
+            [string]$filter
+        )
+        return @(Get-ADUser -Filter $filter -Properties *)
+    }
+
     try {
         $user = $null
+        $count = 0
 
-        # Try finding by FirstName and LastName
-        if ($LastName -and $FirstName) {
-            $FirstName = $FirstName.trim()
-            $LastName = $LastName.trim()
-            $user = @(Get-ADUser -Filter "GivenName -eq '$($FirstName)' -and Surname -eq '$($LastName)'" -Properties *)
-            $count = $user.Count
-            Log-Action "Found $count user(s) with the given name: $userfullname"
-            if ($count -eq 1) {
-                return $user
-            } elseif ($count -gt 1) {
-                return HandleDuplicates -users $user
+        switch -regex ($true) {
+            # Try finding by FirstName and LastName
+            { $LastName -and $FirstName } {
+                $FirstName = $FirstName.trim()
+                $LastName = $LastName.trim()
+                $user = FindUser -filter "GivenName -eq '$FirstName' -and Surname -eq '$LastName'"
+                $count = $user.Count
+                Log-Action "Found $count user(s) with the given name: $userfullname"
+                if ($count -ge 1) { return HandleDuplicates -users $user }
+                continue
             }
-        }
 
-        # If not found, try finding by FirstName only
-        if (-not $user) {
-            $FirstName = $FirstName.trim()
-            $user = @(Get-ADUser -Filter "GivenName -eq '$($FirstName)'" -Properties *)
-            $count = $user.Count
-            Log-Action "Found $count user(s) with the first name: $FirstName"
-            if ($count -eq 1) {
-                return $user
-            } elseif ($count -gt 1) {
-                return HandleDuplicates -users $user
+            # If not found, try finding by FirstName only
+            { -not $user } {
+                $FirstName = $FirstName.trim()
+                $user = FindUser -filter "GivenName -eq '$FirstName'"
+                $count = $user.Count
+                Log-Action "Found $count user(s) with the first name: $FirstName"
+                if ($count -ge 1) { return HandleDuplicates -users $user }
+                continue
             }
-        }
 
-        # If still not found, try finding by LastName only
-        if (-not $user) {
-            $LastName = $LastName.trim()
-            $user = @(Get-ADUser -Filter "Surname -eq '$($LastName)'" -Properties *)
+            # If still not found, try finding by LastName only
+            { -not $user } {
+                $LastName = $LastName.trim()
+                $user = FindUser -filter "Surname -eq '$LastName'"
+                $count = $user.Count
+                Log-Action "Found $count user(s) with the last name: $LastName"
+                if ($count -ge 1) { return HandleDuplicates -users $user }
+                continue
+            }
 
-            $count = $user.Count
-            Log-Action "Found $count user(s) with the last name: $LastName"
-            if ($count -eq 1) {
-                return $user
-            } elseif ($count -gt 1) {
-                return HandleDuplicates -users $user
+            # If still not found, try finding by DisplayName
+            { -not $user } {
+                $user = FindUser -filter "DisplayName -like '*$userfullname*'"
+                $count = $user.Count
+                Log-Action "Found $count user(s) with the display name like: $userfullname"
+                if ($count -ge 1) { return HandleDuplicates -users $user }
+                continue
             }
         }
 
@@ -136,11 +145,13 @@ function fetchUser {
     }
 }
 
+
 # Function to log actions
 function Log-Action {
     param (
         [string]$message
     )
+    write-Host $message
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     Add-Content -Path $logFilePath -Value "$timestamp - $message"
 }
@@ -213,12 +224,12 @@ function Remove-UserFromDistributionLists {
         Log-Action "$UserIdentity is not a member of any groups."
         return
     }
-
+    $count = 0
     try {
         foreach ($groupDN in $groups) {
             $group = Get-ADGroup -Identity $groupDN -Properties GroupCategory
-
             if ($group.GroupCategory -eq "Distribution") {
+                $count++
                 try {
                     Remove-ADGroupMember -Identity $group -Members $UserIdentity -Confirm:$false
                     Log-Action "Removed user $DisplayName from distribution list $($group.Name)."
@@ -229,6 +240,9 @@ function Remove-UserFromDistributionLists {
         }
     } catch {
         Log-Action "An error occurred: $_"
+    }
+    if ($count -eq 0){
+         Log-Action "$UserIdentity is not a member of any groups."
     }
 }
 
@@ -310,7 +324,8 @@ do {
     if ($userfullname -eq 'exit') { break }
 
     $userObject = fetchUser -userfullname $userfullname -typeOfUser "User to Be Disabled"
-    if ($userObject -eq $null) {
+    $ConfirmedDisable = Get-UserInput -Prompt "Confirm disable $($userObject.SamAccountName), Type Y for yes?"
+    if ($userObject -eq $null -or $ConfirmedDisable -ne "Y") {
         Log-Action "Can't find user in the Active Directory: $userfullname"
         continue
     } else {
@@ -325,28 +340,53 @@ do {
         } catch {
             Log-Action "Failed to disable user account for $userfullname : $_"
         }
-
-        # Forward email
-        $forwardingUserName = Get-UserInput -Prompt "Enter the username to forward emails to (leave blank if not required)"
-        if ($forwardingUserName) {
+        
+        #forwarding
+        do {
+            $forwardingUserName = Get-UserInput -Prompt "Enter the username to forward emails to (leave blank if not required)"
+            
+            if (-not $forwardingUserName) {
+                Log-Action "Forwarding not required for $userfullname"
+                break
+            }
+        
             $fowarduserObject = fetchUser -userfullname $forwardingUserName -typeOfUser "user to forward email to"
-            ForwardEmail -userfullname $userObject.mail.toString() -forwardingUserName $fowarduserObject.mail.toString()
-        } else {
-            Log-Action "Forwarding not required for $userfullname"
-        }
+            
+            if ($fowarduserObject) {
+                ForwardEmail -userfullname $userObject.mail.toString() -forwardingUserName $fowarduserObject.mail.toString()
+                $validUser = $true
+            } else {
+                Write-Host "User not found. Please try again."
+                $validUser = $false
+            }
+        } while (-not $validUser)
+        
 
         # Grant full permission
-        $EmailPermissionUser = Get-UserInput -Prompt "Enter the username to grant full mailbox permissions to (leave blank if not required)"
-        if ($EmailPermissionUser) {
+
+        do {
+            $EmailPermissionUser = Get-UserInput -Prompt "Enter the username to grant full mailbox permissions to (leave blank if not required)"
+            
+            if (-not $EmailPermissionUser) {
+                Log-Action "Email permission not required for $userfullname"
+                break
+            }
+            
             $EmailPermissionUserObject = fetchUser -userfullname $EmailPermissionUser -typeOfUser "user to have full email permission"
-            GrantFullPermission -userfullname $userObject.mail.toString() -EmailPermissionUser $EmailPermissionUserObject.mail.toString()
-        } else {
-            Log-Action "Email permission not required for $userfullname"
-        }
+        
+            if ($EmailPermissionUserObject) {
+                GrantFullPermission -userfullname $userObject.mail.toString() -EmailPermissionUser $EmailPermissionUserObject.mail.toString()
+                $validUser = $true
+            } else {
+                Write-Host "User not found. Please try again."
+                $validUser = $false
+            }
+        } while (-not $validUser)
+        
 
         # Set OOO message
-        $InternaloooMessage = Get-UserInput -Prompt "Enter the internal Out-of-Office message (leave blank if not required)"
-        $ExternaloooMessage = Get-UserInput -Prompt "Enter the external Out-of-Office message (leave blank if not required)"
+        $InternaloooMessage = Get-UserInput -Prompt "Enter the internal Out-of-Office message (leave blank if not required, use \\n as newline)"
+        $ExternaloooMessage = Get-UserInput -Prompt "Enter the external Out-of-Office message (leave blank if not required, use \\n as newline)"
         if ($InternaloooMessage -or $ExternaloooMessage) {
             $InternaloooMessage = Remove-FirstAndLastQuotes -inputString $InternaloooMessage
             $ExternaloooMessage = Remove-FirstAndLastQuotes -inputString $ExternaloooMessage
@@ -355,18 +395,34 @@ do {
             Log-Action "Out-of-Office message not required for $userfullname"
         }
 
-        # Set up home folder access
-        $FolderPermissionUser = Get-UserInput -Prompt "Enter the username to grant folder permissions to (leave blank if not required)"
-        if ($FolderPermissionUser -and $personalDrivePath) {
-            $permissionUserObject = fetchUser -userfullname $FolderPermissionUser -typeOfUser "user to have modify folder permission"
-            $permissionUserDrivePath = $permissionUserObject.HomeDirectory
-            # Provide folder access to disable user's personal drive path
-            ProvideFolderAccess -FolderPermissionUser $FolderPermissionUser -PersonalDrivePath $personalDrivePath
-            # Add the shortcut to permission user's desktop pointing to the disabled user
-            AddShortcut -PermissionUserDrivePath $permissionUserDrivePath -PersonalDrivePath $personalDrivePath
-        } else {
-            Log-Action "Folder permission not required or $userfullname home directory does not exist"
-        }
+        do {
+            $FolderPermissionUser = Get-UserInput -Prompt "Enter the username to grant folder permissions to (leave blank if not required)"
+            
+            if (-not $FolderPermissionUser) {
+                Log-Action "Folder permission not required for $userfullname"
+                break
+            }
+        
+            if ($personalDrivePath) {
+                $permissionUserObject = fetchUser -userfullname $FolderPermissionUser -typeOfUser "user to have modify folder permission"
+                
+                if ($permissionUserObject) {
+                    $permissionUserDrivePath = $permissionUserObject.HomeDirectory
+                    # Provide folder access to disable user's personal drive path
+                    ProvideFolderAccess -FolderPermissionUser $permissionUserObject.samAccountName -PersonalDrivePath $personalDrivePath
+                    # Add the shortcut to permission user's desktop pointing to the disabled user
+                    AddShortcut -PermissionUserDrivePath $permissionUserDrivePath -PersonalDrivePath $personalDrivePath
+                    $validUser = $true
+                } else {
+                    Write-Host "User not found. Please try again."
+                    $validUser = $false
+                }
+            } else {
+                Log-Action "$userfullname home directory does not exist"
+                $validUser = $true
+            }
+        } while (-not $validUser)
+        
     }
 } while ($true)
 

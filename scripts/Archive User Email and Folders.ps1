@@ -1,37 +1,61 @@
+# Function to disconnect from Exchange Online
+function Disconnect-ExchangeOnline {
+    param (
+        [Parameter(Mandatory = $true)]
+        [System.Management.Automation.Runspaces.PSSession]$Session
+    )
+
+    try {
+        Remove-PSSession -Session $Session
+        Log-Action "Disconnected from Exchange Online"
+    } catch {
+        Log-Action "Failed to disconnect from Exchange Online: $_"
+    }
+}
+function Get-UserInput {
+    param (
+        [string]$Prompt
+    )
+    Read-Host -Prompt $Prompt
+}
+
 function fetchUser {
     param (
         [string]$userfullname,
-        [String]$typeOfUser
+        [string]$typeOfUser
     )
     
-    # Split each entry into FirstName and LastName
-    $FirstName, $LastName = $userfullname -split " "
+    # Split the entry into LastName and FirstName
+    $FirstName, $Lastname = $userfullname -split " "
     
+    # Trim any whitespace from the names
+    $FirstName = $FirstName.Trim()
+    $LastName = $LastName.Trim()
     
-        # Function to handle duplicates and prompt user to choose
-        function HandleDuplicates {
+    # Function to handle duplicates and prompt user to choose
+    function HandleDuplicates {
         param (
             [array]$users
         )
 
         if ($users.Count -eq 0) {
-            Write-Output "No users found."
+            Write-Host "No users found."
             return $null
         }
 
         # Present the list of users
         PresentUserList -users $users
 
-        Write-Host "Multiple users found. Please choose the correct $typeofUser by entering the corresponding SamAccountName:"
+        Write-Host "Multiple users found. Please choose the correct $typeOfUser by entering the corresponding SamAccountName:"
     
-        $selectedIndex = Read-Host "Enter the SamAccountName of the $typeofUser you want to select"
+        $selectedIndex = Read-Host "Enter the SamAccountName of the $typeOfUser you want to select"
         $selectedUser = $users | Where-Object { $_.SamAccountName -eq $selectedIndex }
         
         if ($selectedUser) {
-            $ADUser = Get-ADUser -Identity $selectedUser -Properties *
+            $ADUser = Get-ADUser -Identity $selectedUser.SamAccountName -Properties *
             return $ADUser
         } else {
-            Write-Output "Invalid selection. No user found with SamAccountName '$selectedIndex'."
+            Write-Host "Invalid selection. No user found with SamAccountName '$selectedIndex'."
             return $null
         }
     }
@@ -40,14 +64,12 @@ function fetchUser {
         $user = $null
 
         # Try finding by FirstName and LastName
-        if ($LastName -and $Fistname) {
-            $Firstname = $Firstname.trim()
-            $Lastname = $Lastname.trim()
+        if ($LastName -and $FirstName) {
             $user = @(Get-ADUser -Filter "GivenName -eq '$($FirstName)' -and Surname -eq '$($LastName)'" -Properties *)
             $count = $user.Count
             Log-Action "Found $count user(s) with the given name: $userfullname"
             if ($count -eq 1) {
-                return PresentUserList -users $users
+                return $user
             } elseif ($count -gt 1) {
                 return HandleDuplicates -users $user
             }
@@ -55,13 +77,12 @@ function fetchUser {
 
         # If not found, try finding by FirstName only
         if (-not $user) {
-            $Firstname = $Firstname.trim()
             $user = @(Get-ADUser -Filter "GivenName -eq '$($FirstName)'" -Properties *)
             $count = $user.Count
             Log-Action "Found $count user(s) with the first name: $FirstName"
-            
+            PresentUserList -users $user
             if ($count -eq 1) {
-                return PresentUserList -users $users
+                return $user
             } elseif ($count -gt 1) {
                 return HandleDuplicates -users $user
             }
@@ -69,13 +90,11 @@ function fetchUser {
 
         # If still not found, try finding by LastName only
         if (-not $user) {
-            $LastName = $LastName.trim()
             $user = @(Get-ADUser -Filter "Surname -eq '$($LastName)'" -Properties *)
-
             $count = $user.Count
             Log-Action "Found $count user(s) with the last name: $LastName"
             if ($count -eq 1) {
-                return PresentUserList -users $users
+                return $user
             } elseif ($count -gt 1) {
                 return HandleDuplicates -users $user
             }
@@ -91,6 +110,7 @@ function fetchUser {
         return $null
     }
 }
+
 function PresentUserList {
     param (
         [array]$users
@@ -112,13 +132,17 @@ function PresentUserList {
     Write-Host "List of users found:"
     $formattedUsers | Format-Table -Property SamAccountName, GivenName, Surname -AutoSize | Out-String | Write-Host
 }
+
 function Log-Action {
     param (
         [string]$message
     )
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    Add-Content -Path $logFilePath -Value "$timestamp - $message"
+    $logMessage = "$timestamp - $message"
+    Add-Content -Path $logFilePath -Value $logMessage
+    Write-Host $logMessage
 }
+
 function Copy-UserHomeDirectory {
     param (
         [string]$sourceDir,
@@ -136,8 +160,9 @@ function Copy-UserHomeDirectory {
 
     Copy-Item -Path $sourceDir -Destination $destinationDir -Recurse -Force
 
-    Log-Action "Home directory copied successfully."
+    Log-Action "Home directory copied successfully from $sourceDir to $destinationDir."
 }
+
 function Archive-Emails {
     param (
         [string]$username,
@@ -163,33 +188,52 @@ function Archive-Emails {
     # Move the PST file to the archive location
     Move-Item -Path $tempPstPath -Destination $destinationPstPath -Force
     
-    Write-Host "Emails archived successfully to $destinationPstPath."
+    Log-Action "Emails archived successfully to $destinationPstPath."
 }
 
 $archiveBaseDir = "\\Empress\Payroll\Former Employees\Other"
 
-#get exchange admin credentials
+# Get Exchange admin credentials
 $UserCredential = Get-Credential
 
 # Connect to Exchange Online
-
- try {
-      $Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri http://cecelia.devonprop.local/PowerShell/  -Authentication Kerberos -Credential $UserCredential
-      Import-PSSession $Session -DisableNameChecking
-      Log-Action "Connected to Exchange Online"
-    } catch {
-      Log-Action "Failed to connect to Exchange Online: $_"
-        exit
-}
-$users = Get-Content "usertoBeArchived.txt"
-foreach ($user in $users){
-    $userfullname = $user.name
-    $userObject = fetchUser -userfullname $userfullname
-    $archiveDir = $archiveDir = Join-Path -Path $archiveBaseDir -ChildPath $userFullName
-    Copy-UserHomeDirectory -sourceDir $userobject.HomeDirectory -destinationDir $archiveDir
-    Archive-Emails -userEmail $userObject.samAccountName -destinationDir $archiveDir
-    # Open the archive folder
-    Invoke-Item -Path $archiveDir
+try {
+    $Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri http://cecelia.devonprop.local/PowerShell/ -Authentication Kerberos -Credential $UserCredential
+    Import-PSSession $Session -DisableNameChecking
+    Log-Action "Connected to Exchange Online"
+} catch {
+    Log-Action "Failed to connect to Exchange Online: $_"
+    exit
 }
 
+do {
+    $userfullname = Get-UserInput -Prompt "Enter the full name of the user to be archived (Firstname Lastname) or type 'exit' to quit"
+    if ($userfullname -eq 'exit') { break }
 
+    $userObject = fetchUser -userfullname $userfullname -typeOfUser "archive user"
+    if ($userObject -eq $null) {
+        Log-Action "Can't find user in the Active Directory: $userfullname"
+        continue
+    } elseif ($userObject.Enabled -eq $true) {
+        Write-Host "The selected user account is not disabled. Please enter a different user."
+        continue   
+    } else {
+        Write-Host "The selected user account is confirmed as Disabled."
+        
+        $archiveDir = Join-Path -Path $archiveBaseDir -ChildPath "$($userObject.Surname), $($userObject.GivenName)"
+        
+        try {
+            Copy-UserHomeDirectory -sourceDir $userObject.HomeDirectory -destinationDir $archiveDir
+            Archive-Emails -username $userObject.SamAccountName -destinationDir $archiveDir
+            Invoke-Item -Path $archiveDir
+            Log-Action "Successfully archived user data for $($userObject.GivenName) $($userObject.Surname)."
+        } catch {
+            Log-Action "An error occurred while archiving data for user $($userObject.GivenName) $($userObject.Surname): $_"
+        }
+    }
+} while ($true)
+
+        
+# Call the function to disconnect and log the action
+Disconnect-ExchangeOnline -Session $Session
+Write-Host "Processing completed. Log file created at $logFilePath"
