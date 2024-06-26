@@ -47,10 +47,10 @@ Set-Mailbox -Identity $calenderName -EmailAddressPolicyEnabled $false
 #Set the calender mailbox as shared
 
 Set-Mailbox $calenderName -Type:Shared
-
+#############################below needs fix######################################
 #Grant groups permissions to calenders
-Add-MailboxFolderPermission -Identity "${$calenderName}" -User $EditorgroupName -AccessRights Editor
-Add-MailboxFolderPermission -Identity "${$calenderName}" -User $ReviewergroupName -AccessRights Reviewer
+#Add-MailboxFolderPermission -Identity "${$calenderName}" -User $EditorgroupName -AccessRights Editor
+#Add-MailboxFolderPermission -Identity "${$calenderName}" -User $ReviewergroupName -AccessRights Reviewer
 
 #Default: remove Free/Busy time; change to “None”
 #Anonymous: confirm is “None” for calende 

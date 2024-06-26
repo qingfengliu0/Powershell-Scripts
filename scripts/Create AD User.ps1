@@ -139,6 +139,45 @@ function Log-Action {
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     Add-Content -Path $logFilePath -Value "$timestamp - $message"
 }
+function Copy-ADUserAsTemplate {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$TemplateUserName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$NewUserName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$NewUserPassword,
+
+        [string]$NewUserUPN = "$NewUserName@domain.com",
+
+        [string]$NewUserOU = (Get-ADUser -Identity $TemplateUserName).DistinguishedName
+    )
+
+    # Get the template user object
+    $templateUser = Get-ADUser -Identity $TemplateUserName -Properties *
+
+    # Modify properties for the new user
+    $newUserInstance = $templateUser.PSObject.Copy()
+    $newUserInstance.Name = $NewUserName
+    $newUserInstance.SamAccountName = $NewUserName
+    $newUserInstance.UserPrincipalName = $NewUserUPN
+    $newUserInstance.AccountPassword = (ConvertTo-SecureString $NewUserPassword -AsPlainText -Force)
+    $newUserInstance.Enabled = $true
+    $newUserInstance.DistinguishedName = $NewUserOU
+
+    # Create the new user
+    New-ADUser -Instance $newUserInstance
+
+    # Get the group memberships of the template user
+    $templateUserGroups = Get-ADUser -Identity $TemplateUserName -Properties MemberOf | Select-Object -ExpandProperty MemberOf
+
+    # Add the new user to each of the template user's groups
+    foreach ($group in $templateUserGroups) {
+        Add-ADGroupMember -Identity $group -Members $NewUserName
+    }
+}
 
 # Function to create a new user on the domain
 function New-DomainUser {
