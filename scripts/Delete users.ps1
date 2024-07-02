@@ -1,7 +1,3 @@
-$UserCredential = Get-Credential
-$Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri http://POWDERKING.lcs.local/PowerShell/ -Authentication Kerberos -Credential $UserCredential
-Import-PSSession $Session -DisableNameChecking
-
 function PresentUserList {
     param (
         [array]$users
@@ -154,16 +150,27 @@ function Remove-ProfileItem {
 
     if (Test-Path $path) {
         try {
-            Robocopy Emptyfolder $path /purge /e /ndl /njh
-            Remove-Item -Path $path
-            Log-Action "Deleted item at path: $path" | Out-File -FilePath UsersDeleteResult.txt -Append
+             Write-Host "Starting to purge the directory: $path"
+            
+            # Use Robocopy to purge the directory
+            Robocopy $Emptyfolder $path /purge /e /ndl /njh *> $null
+            Write-Host "Purged the directory using Robocopy: $path"
+            # Remove the directory and its contents recursively
+            Remove-Item -Path $path -Recurse -Force
+            Write-Host "Successfully removed the directory: $path"
+            # Log successful deletion
+            Log-Action "Deleted item at path: $path"
         } catch {
-            Log-Action "Error deleting item at path: $path - $_" | Out-File -FilePath UsersDeleteResult.txt -Append
+            # Log any errors that occur
+            Log-Action "Error deleting item at path: $path - $_"
         }
     } else {
-        Log-Action "Item not found at path: $path" | Out-File -FilePath UsersDeleteResult.txt -Append
+        # Log if the item was not found
+        Log-Action "Item not found at path: $path"
     }
 }
+
+
 
 function DeleteMailbox {
     param(
@@ -204,27 +211,65 @@ function DeleteProfile {
             Start-Process -FilePath 'delprof2.exe' -ArgumentList "/c:$computer /p /id:$samAccountName" -Wait
             Log-Action "Deleted profile for $samAccountName on $computer"
         } catch {
-            Log-Action "Failed to delete profile for $samAccountName on $computer: $_"
+            Log-Action "Failed to delete profile for $samAccountName on $computer : $_"
         }
     }
+}
+function Remove-MailboxBySmtp {
+    param (
+        [string]$smtpAddress
+    )
+
+    try {
+        # Check if the SMTP address is not empty
+        if (-not [string]::IsNullOrWhiteSpace($smtpAddress)) {
+            # Confirm the SMTP address to be deleted
+            Write-Host "Attempting to remove mailbox for: $smtpAddress"
+
+            # Remove the mailbox with confirmation
+            Remove-Mailbox -Identity $smtpAddress -Confirm:$true
+
+            Write-Host "The mailbox for $smtpAddress has been successfully removed."
+        } else {
+            Write-Host "The provided SMTP address is empty or invalid."
+        }
+    } catch {
+        Write-Host "An error occurred while attempting to remove the mailbox for $smtpAddress."
+        Write-Host "Error details: $_"
+    }
+}
+
+# Get Exchange admin credentials
+$UserCredential = Get-Credential
+$logFilePath = "userdelete.log"
+# Connect to Exchange Online
+$Emptyfolder = "EmptyFolder"
+# ---------------define the following variable for different client #-----------------
+$exchangeserver =  "http://cecelia.devonprop.local/PowerShell/"
+$fileserver = "Hall"
+try {
+    $Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri $exchangeserver -Authentication Kerberos -Credential $UserCredential
+    Import-PSSession $Session -DisableNameChecking
+    Log-Action "Connected to Exchange Online"
+} catch {
+    Log-Action "Failed to connect to Exchange Online: $_"
+    exit
 }
 
 do {
     $userfullname = Read-Host "Enter the full name of the user to be deleted (Firstname Lastname) or type 'exit' to quit"
     if ($userfullname -eq 'exit') { break }
-
-    do {
-        $userObject = fetchUser -userfullname $userfullname -typeOfUser "user to be deleted"
-        if ($userObject) {
-            Write-Host "You selected user: $($userObject.GivenName) $($userObject.Surname) (Account is $($userObject.Enabled ? 'enabled' : 'disabled'))"
-            $confirmation = Read-Host "Is this correct? (yes/no)"
-        } else {
+    $confirmation = "no"
+    $userObject = fetchUser -userfullname $userfullname -typeOfUser "user to be deleted"
+    if ($userObject) {
+        Write-Host "You selected user: $($userObject.GivenName) $($userObject.Surname)"
+        $confirmation = Read-Host "Is this correct? (yes/no)"
+     } else {
             Log-Action "Can't find user in the Active Directory: $userfullname"
-            $confirmation = "no"
-        }
-    } while ($confirmation -ne "yes")
+            continue
+     }
 
-    if ($userObject -ne $null) {
+    if ($userObject -ne $null -and $confirmation -eq "yes") {
         $personalDrivePath = $userObject.HomeDirectory
         $roamingProfilePath = $userObject.ProfilePath
         $roamingProfilePathV2 = "$roamingProfilePath.V2"
@@ -233,17 +278,18 @@ do {
         $lldpusertspath = $lldpuser.psbase.InvokeGet("terminalservicesprofilepath")
         $tsProfilePathV2 = "$lldpusertspath.V2"
         $tsProfilePathV6 = "$lldpusertspath.V6"
-        #$netlogonScriptPath = "\\$fileServer\NETLOGON\$($userObject.samAccountName).bat"
+        $netlogonScriptPath = "\\$fileServer\NETLOGON\$($userObject.samAccountName).bat"
 
         if ($userObject.Enabled -eq $false) {
-            Log-Action "$($userObject.SamAccountName) is disabled." | Out-File -FilePath UsersDeleteResult.txt -Append
+            Log-Action "$($userObject.SamAccountName) is disabled."
 
             Remove-ProfileItem -path $personalDrivePath
             Remove-ProfileItem -path $roamingProfilePathV2
             Remove-ProfileItem -path $roamingProfilePathV6
             Remove-ProfileItem -path $tsProfilePathV2
             Remove-ProfileItem -path $tsProfilePathV6
-            #Remove-ProfileItem -path $netlogonScriptPath  
+            Remove-MailboxBySmtp -smtpAddress $userObject.mail.toString() -Confirm:$true
+            Remove-ProfileItem -path $netlogonScriptPath  
             $computers = @()
         do {
             $computer = Read-Host "Enter the name of a computer the user has access to (type 'done' when finished)"
@@ -256,7 +302,10 @@ do {
             Log-Action "Completed deletion tasks for user $($userObject.GivenName) $($userObject.Surname)."
         } elseif ($userObject.Enabled -eq $true) {
             Log-Action "User $($userObject.GivenName) $($userObject.Surname) is still enabled, skipping deletion."
-        } else {
+        } elseif ($confirmation -eq "no"){
+        
+            Log-Action "You refuse delete the found user $($userObject.GivenName) $($userObject.Surname)"
+        }else {
             Log-Action "User $($userObject.GivenName) $($userObject.Surname) not found."
             }
         }
